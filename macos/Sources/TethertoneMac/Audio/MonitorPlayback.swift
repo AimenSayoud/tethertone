@@ -132,7 +132,10 @@ final class MonitorPlayback {
 }
 
 enum AudioOutputs {
-    static func devices() -> [AudioInputDevice] {
+    /// Output devices. Loopback devices such as BlackHole are left out unless
+    /// asked for: monitoring into one would feed capture back into itself, but
+    /// they are exactly the target for "use the phone as a microphone".
+    static func devices(includeLoopback: Bool = false) -> [AudioInputDevice] {
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDevices,
             mScope: kAudioObjectPropertyScopeGlobal,
@@ -149,11 +152,24 @@ enum AudioOutputs {
             let channels = outputChannelCount(id)
             guard channels > 0 else { return nil }
             let name = AudioDevices.name(of: id) ?? "device \(id)"
-            // Monitoring into BlackHole would feed capture back into itself.
-            guard !name.localizedCaseInsensitiveContains("blackhole") else { return nil }
+            if !includeLoopback, name.localizedCaseInsensitiveContains("blackhole") { return nil }
             return AudioInputDevice(id: id, name: name, inputChannels: channels,
                                     sampleRate: AudioDevices.nominalRate(id))
         }
+    }
+
+    /// The device macOS currently sends system output to.
+    static func defaultOutput() -> AudioDeviceID? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var id = AudioDeviceID(0)
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &id) == noErr,
+              id != 0 else { return nil }
+        return id
     }
 
     private static func outputChannelCount(_ id: AudioDeviceID) -> Int {

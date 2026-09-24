@@ -12,6 +12,10 @@ enum Proto {
     static let pong: UInt8 = 2
     static let stats: UInt8 = 3
     static let bye: UInt8 = 4
+    static let control: UInt8 = 5
+
+    /// Capability: audio in both directions plus CONTROL frames (PROTOCOL.md §6).
+    static let capDuplex = "duplex"
 }
 
 struct FrameHeader {

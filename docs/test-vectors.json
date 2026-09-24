@@ -1,0 +1,19 @@
+{
+  "comment": "Shared by every Tethertone protocol implementation: Swift self-test, Kotlin tests, tools/probe.py and the desktop app. Change it and every implementation must still pass.",
+  "headers": [
+    { "name": "ping is big-endian", "type": 1, "flags": 0, "length": 8, "seq": 16909060, "hex": "0100000801020304" },
+    { "name": "audio block", "type": 0, "flags": 0, "length": 1920, "seq": 65537, "hex": "0000078000010001" },
+    { "name": "control frame", "type": 5, "flags": 0, "length": 60, "seq": 0, "hex": "0500003c00000000" },
+    { "name": "maximum sequence", "type": 0, "flags": 0, "length": 0, "seq": 4294967295, "hex": "00000000ffffffff" }
+  ],
+  "control": [
+    { "name": "client mode with microphone", "json": "{\"t\":\"mode\",\"down\":true,\"up\":\"mic\",\"upRate\":48000,\"upCh\":1}",
+      "expect": { "t": "mode", "down": true, "up": "mic", "upRate": 48000, "upCh": 1 } },
+    { "name": "server asks for playback only", "json": "{\"t\":\"setMode\",\"down\":false,\"up\":\"playback\"}",
+      "expect": { "t": "setMode", "down": false, "up": "playback" } },
+    { "name": "unknown keys are ignored", "json": "{\"t\":\"upDenied\",\"reason\":\"busy\",\"future\":[1,2]}",
+      "expect": { "t": "upDenied", "reason": "busy" } },
+    { "name": "unknown up value means off", "json": "{\"t\":\"mode\",\"down\":true,\"up\":\"hologram\"}",
+      "expect": { "t": "mode", "down": true, "up": "off" } }
+  ]
+}

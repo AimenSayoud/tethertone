@@ -1,3 +1,4 @@
+import CoreAudio
 import SwiftUI
 
 enum AppSection: String, CaseIterable, Identifiable {
@@ -129,6 +130,7 @@ struct OverviewPane: View {
     var body: some View {
         Pane(title: "Overview", subtitle: model.status) {
             CaptureMethodCard(model: model)
+            DirectionCard(model: model)
 
             Card {
                 HStack(spacing: 20) {
@@ -334,6 +336,144 @@ struct CaptureMethodCard: View {
     }
 }
 
+// MARK: - direction (two-way audio)
+
+/// Which way audio flows, as the user thinks of it.
+enum Direction: String, CaseIterable, Identifiable {
+    case toPhone, toMac, both
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .toPhone: return "To phone"
+        case .toMac: return "To Mac"
+        case .both: return "Both"
+        }
+    }
+
+    init(_ mode: StreamMode) {
+        if mode.up == .off { self = .toPhone } else if !mode.down { self = .toMac } else { self = .both }
+    }
+
+    func mode(source: UpSource) -> StreamMode {
+        let up = source == .off ? UpSource.mic : source
+        switch self {
+        case .toPhone: return StreamMode(down: true, up: .off)
+        case .toMac: return StreamMode(down: false, up: up)
+        case .both: return StreamMode(down: true, up: up)
+        }
+    }
+}
+
+/// Direction per connected phone, plus where the phone's audio plays on this Mac.
+///
+/// The phone owns the mode — it holds the microphone and the capture consent —
+/// so every control here is a request. The phone's answer comes back as its
+/// new mode, or as a reason it could not, e.g. that its screen is needed to
+/// grant a permission.
+struct DirectionCard: View {
+    @ObservedObject var model: ServerModel
+
+    var body: some View {
+        Card(title: "Direction",
+             footnote: "Sending the phone's microphone while it also plays the Mac's audio works best "
+                     + "with headphones on the phone; otherwise its speaker is heard by its own microphone.") {
+            if model.clients.isEmpty {
+                Text("Connect a phone to choose which way the audio goes.")
+                    .foregroundStyle(.secondary)
+            }
+            ForEach(model.clients) { client in
+                if client.duplex {
+                    phoneControls(client)
+                } else {
+                    Label("\(client.name) has an older Tethertone. Update it on the phone for two-way audio.",
+                          systemImage: "arrow.down.circle")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            if model.clients.contains(where: \.duplex) {
+                Divider()
+                destination
+            }
+
+            if let warning = model.upLoopWarning {
+                Label(warning, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption).foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if let problem = model.upProblem {
+                Label(problem, systemImage: "exclamationmark.circle")
+                    .font(.caption).foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func phoneControls(_ client: ClientSnapshot) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if model.clients.count > 1 {
+                Text(client.name).fontWeight(.medium)
+            }
+            Picker("Direction", selection: Binding(
+                get: { Direction(client.mode) },
+                set: { model.requestMode($0.mode(source: client.mode.up), for: client) }
+            )) {
+                ForEach(Direction.allCases) { Text($0.title).tag($0) }
+            }
+            .labelsHidden()
+            .pickerStyle(.segmented)
+
+            if client.mode.up != .off {
+                Picker("From the phone", selection: Binding(
+                    get: { client.mode.up },
+                    set: { model.requestMode(StreamMode(down: client.mode.down, up: $0), for: client) }
+                )) {
+                    Text("Microphone").tag(UpSource.mic)
+                    Text("Its playing audio").tag(UpSource.playback)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var destination: some View {
+        Picker("Phone audio plays on", selection: Binding(
+            get: { model.upOutputDeviceID.map(Int.init) ?? -1 },
+            set: { model.upOutputDeviceID = $0 >= 0 ? AudioDeviceID($0) : nil }
+        )) {
+            Text("System output").tag(-1)
+            ForEach(model.upOutputDevices) { device in Text(device.name).tag(Int(device.id)) }
+        }
+        Text("To use the phone as a microphone in other apps, choose BlackHole here and pick BlackHole "
+             + "as the microphone in those apps.")
+            .font(.caption).foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+
+        if let up = model.upStream {
+            VStack(alignment: .leading, spacing: 6) {
+                Label("Receiving from \(up.phoneName) · \(up.channels == 1 ? "mono" : "stereo") \(up.sampleRate / 1000) kHz",
+                      systemImage: "waveform")
+                    .font(.caption).foregroundStyle(.green)
+                LevelMeter(level: model.upLevel)
+                TimelineView(.periodic(from: .now, by: 1)) { _ in
+                    Text(String(format: "buffer %d ms · underruns %d · %+.0f ppm",
+                                model.upBufferMs, model.upUnderruns, (model.upSpeed - 1) * 1_000_000))
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
+                HStack {
+                    Image(systemName: "speaker.fill").foregroundStyle(.secondary)
+                    Slider(value: $model.upVolume, in: 0...1)
+                    Image(systemName: "speaker.wave.3.fill").foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+}
+
 // MARK: - audio
 
 struct AudioPane: View {
@@ -342,6 +482,7 @@ struct AudioPane: View {
     var body: some View {
         Pane(title: "Audio", subtitle: "Where the sound comes from, and whether you hear it here too.") {
             CaptureMethodCard(model: model, showsDeviceDetails: true)
+            DirectionCard(model: model)
 
             if model.sourceKind == .device {
                 Card(title: "Hear it on this Mac too",

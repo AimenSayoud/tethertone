@@ -25,6 +25,55 @@ enum SelfTest {
         check(actual == expected, name, "got \(actual), expected \(expected)")
     }
 
+    /// docs/test-vectors.json, the file the Kotlin tests and probe.py also
+    /// check. Found relative to the working directory, or passed after
+    /// `--selftest`; skipped with a note when neither exists (an installed app).
+    private static func sharedVectors() {
+        let arguments = CommandLine.arguments
+        var candidates = ["docs/test-vectors.json", "../docs/test-vectors.json", "../../docs/test-vectors.json"]
+        if let index = arguments.firstIndex(of: "--selftest"), index + 1 < arguments.count,
+           arguments[index + 1].hasSuffix(".json") {
+            candidates.insert(arguments[index + 1], at: 0)
+        }
+        guard let path = candidates.first(where: FileManager.default.fileExists(atPath:)),
+              let data = FileManager.default.contents(atPath: path),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            print("\nshared vectors: docs/test-vectors.json not found, skipped")
+            return
+        }
+
+        print("\nshared vectors (\(path))")
+        for vector in root["headers"] as? [[String: Any]] ?? [] {
+            let name = vector["name"] as? String ?? "?"
+            guard let type = vector["type"] as? Int, let length = vector["length"] as? Int,
+                  let seq = (vector["seq"] as? NSNumber)?.uint32Value, let hex = vector["hex"] as? String
+            else { check(false, "header vector \(name) is well-formed"); continue }
+            let encoded = encodeHeader(type: UInt8(type), length: length, seq: seq)
+            equal(encoded.map { String(format: "%02x", $0) }.joined(), hex, "header: \(name)")
+        }
+        for vector in root["control"] as? [[String: Any]] ?? [] {
+            let name = vector["name"] as? String ?? "?"
+            guard let json = (vector["json"] as? String)?.data(using: .utf8),
+                  let expect = vector["expect"] as? [String: Any],
+                  let message = try? JSONDecoder().decode(ControlMessage.self, from: json)
+            else { check(false, "control: \(name) decodes"); continue }
+            var ok = message.t == expect["t"] as? String
+            if let down = expect["down"] as? Bool { ok = ok && message.streamMode.down == down }
+            if let up = expect["up"] as? String { ok = ok && message.streamMode.up.rawValue == up }
+            if let rate = expect["upRate"] as? Int { ok = ok && message.upRate == rate }
+            if let channels = expect["upCh"] as? Int { ok = ok && message.upCh == channels }
+            if let reason = expect["reason"] as? String { ok = ok && message.reason == reason }
+            check(ok, "control: \(name)")
+        }
+
+        print("\ndrift correction law")
+        equal(UpstreamPlayer.speed(bufferedMs: 60, targetMs: 60), 1.0, "on target plays at 1.0")
+        equal(UpstreamPlayer.speed(bufferedMs: 62, targetMs: 60), 1.0, "inside the dead zone")
+        equal(UpstreamPlayer.speed(bufferedMs: 120, targetMs: 60), 1.002, "full buffer drains at +0.2%")
+        equal(UpstreamPlayer.speed(bufferedMs: 0, targetMs: 60), 0.998, "empty buffer refills at -0.2%")
+        equal(UpstreamPlayer.speed(bufferedMs: 900, targetMs: 60), 1.002, "correction is clamped")
+    }
+
     static func run() -> Never {
         failures.removeAll()
         print("Tethertone protocol self-test\n")
@@ -86,6 +135,8 @@ enum SelfTest {
         let vpn = addresses.filter(Pairing.isMeshVPN)
         check(vpn.allSatisfy { addresses.suffix(vpn.count).contains($0) },
               "VPN addresses come last")
+
+        sharedVectors()
 
         print("")
         if failures.isEmpty {

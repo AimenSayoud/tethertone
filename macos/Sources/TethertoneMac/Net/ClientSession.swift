@@ -12,6 +12,10 @@ struct ClientSnapshot: Identifiable, Equatable {
     var lost: Int
     var speed: Double
     var connectedAt: Date
+    /// Whether this client can do two-way audio. Older phone apps cannot.
+    var duplex = false
+    /// The client's current mode; only meaningful when `duplex`.
+    var mode = StreamMode()
 }
 
 /// One connected sink. Owns its own send queue so a phone that stalls cannot
@@ -33,6 +37,9 @@ final class ClientSession {
 
     private var seq: UInt32 = 0
     private var pingSeq: UInt32 = 0
+    private var upExpectedSeq: UInt32?
+    private(set) var upLost = 0
+    private(set) var upFormat: (rate: Int, channels: Int)?
     private var pingTimer: DispatchSourceTimer?
 
     private(set) var snapshot: ClientSnapshot
@@ -42,6 +49,12 @@ final class ClientSession {
     var onReady: ((ClientSession) -> Void)?
     var onUpdate: ((ClientSession) -> Void)?
     var onClosed: ((ClientSession) -> Void)?
+    /// The client reported a new mode (duplex only). Called on the server queue.
+    var onModeChanged: ((ClientSession) -> Void)?
+    /// Audio the client sent up. Called on the server queue.
+    var onUpAudio: ((ClientSession, Data) -> Void)?
+    /// The client refused a mode change asked for from this Mac.
+    var onRefused: ((ClientSession, String) -> Void)?
 
     init(connection: NWConnection, queue: DispatchQueue, token: String,
          format: StreamFormat, serverName: String, maxQueued: Int = 24) {
@@ -133,10 +146,12 @@ final class ClientSession {
         authorised = true
         snapshot.name = String(hello.name.prefix(48))
         snapshot.connectedAt = Date()
+        snapshot.duplex = hello.caps?.contains(Proto.capDuplex) ?? false
 
         let welcome = Welcome(v: Proto.version, ok: true, rate: format.sampleRate,
                               ch: format.channels, fmt: "pcm_s16le",
-                              block: format.blockFrames, name: serverName)
+                              block: format.blockFrames, name: serverName,
+                              caps: [Proto.capDuplex])
         guard var payload = try? JSONEncoder().encode(welcome) else {
             reject("internal error"); return
         }
@@ -166,6 +181,8 @@ final class ClientSession {
     func enqueue(_ pcm: Data) {
         queue.async { [weak self] in
             guard let self, self.authorised else { return }
+            // The client asked for nothing down: keep only the pings flowing.
+            if self.snapshot.duplex && !self.snapshot.mode.down { return }
             if self.pending.count >= self.maxQueued {
                 self.pending.removeFirst()
                 self.snapshot.dropped += 1
@@ -261,8 +278,47 @@ final class ClientSession {
             }
         case Proto.bye:
             teardown()
+        case Proto.control where snapshot.duplex:
+            handleControl(payload)
+        case Proto.audio where snapshot.duplex && snapshot.mode.up != .off:
+            if let expected = upExpectedSeq, header.seq != expected {
+                upLost += Int(header.seq &- expected)
+            }
+            upExpectedSeq = header.seq &+ 1
+            onUpAudio?(self, payload)
+        default:
+            break      // unknown types are ignored (PROTOCOL.md §2)
+        }
+    }
+
+    private func handleControl(_ payload: Data) {
+        guard let message = try? JSONDecoder().decode(ControlMessage.self, from: payload) else { return }
+        switch message.t {
+        case ControlMessage.Kind.mode:
+            let mode = message.streamMode
+            if mode.up == .off {
+                upFormat = nil
+            } else {
+                upFormat = (message.upRate ?? 48000, message.upCh ?? 1)
+            }
+            if mode.up != snapshot.mode.up { upExpectedSeq = nil; upLost = 0 }
+            snapshot.mode = mode
+            onModeChanged?(self)
+            onUpdate?(self)
+        case ControlMessage.Kind.refused:
+            onRefused?(self, message.reason ?? "The phone declined.")
         default:
             break
+        }
+    }
+
+    /// Queued behind any audio already being sent, so frames never interleave.
+    func sendControl(_ message: ControlMessage) {
+        queue.async { [weak self] in
+            guard let self, self.authorised, self.snapshot.duplex,
+                  let payload = try? JSONEncoder().encode(message) else { return }
+            let packet = frame(type: Proto.control, payload: payload, seq: 0)
+            self.connection.send(content: packet, completion: .contentProcessed { _ in })
         }
     }
 

@@ -21,6 +21,14 @@ jobs:
       - name: Protocol self-test
         working-directory: macos
         run: ./Tethertone.app/Contents/MacOS/Tethertone --selftest
+      - name: End to end, both directions (headless server + probe.py)
+        working-directory: macos
+        run: |
+          ./Tethertone.app/Contents/MacOS/Tethertone --headless --test-tone > server.log 2>&1 &
+          sleep 3
+          python3 ../tools/probe.py --seconds 5 --up-tone
+          kill %1 || true
+          cat server.log
 
   android:
     name: Android app and shared module
@@ -45,8 +53,8 @@ jobs:
           if-no-files-found: error
 
   probe:
-    name: probe.py syntax
+    name: probe.py against the shared vectors
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: python3 -m py_compile tools/probe.py
+      - run: python3 tools/probe.py --selftest
