@@ -54,6 +54,7 @@ fun HomeScreen(
     onDisconnect: () -> Unit,
     onForget: () -> Unit,
     modifier: Modifier = Modifier,
+    direction: @Composable () -> Unit = {},
 ) {
     val live = state is BridgeState.Connected
     val busy = state is BridgeState.Connecting || state is BridgeState.Reconnecting
@@ -73,7 +74,7 @@ fun HomeScreen(
             Column {
                 Text("Tethertone", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
                 Text(
-                    "Your Mac's audio, on this phone.",
+                    "Audio between your Mac and this phone.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -82,6 +83,8 @@ fun HomeScreen(
         }
 
         StatusCard(state)
+
+        if (pairing != null) direction()
 
         if (live) {
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {

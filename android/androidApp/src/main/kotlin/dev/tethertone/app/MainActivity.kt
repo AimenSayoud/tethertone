@@ -1,7 +1,9 @@
 package dev.tethertone.app
 
 import android.Manifest
+import android.app.Activity
 import android.content.Intent
+import android.media.projection.MediaProjectionManager
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -9,6 +11,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.safeDrawingPadding
@@ -28,6 +31,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.tethertone.shared.BridgeState
 import dev.tethertone.shared.Pairing
 import dev.tethertone.shared.PairingInfo
+import dev.tethertone.shared.StreamMode
+import dev.tethertone.shared.UpSource
 
 class MainActivity : ComponentActivity() {
 
@@ -43,6 +48,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        BridgeController.init(this)
 
         cameraGranted = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) ==
             PackageManager.PERMISSION_GRANTED
@@ -114,6 +120,60 @@ private fun AppRoot(
     val state by BridgeController.state.collectAsStateWithLifecycle()
     val stats by BridgeController.stats.collectAsStateWithLifecycle()
     val level by BridgeController.level.collectAsStateWithLifecycle()
+    val mode by BridgeController.mode.collectAsStateWithLifecycle()
+    val uplink by BridgeController.uplinkStatus.collectAsStateWithLifecycle()
+    val upLevel by BridgeController.upLevel.collectAsStateWithLifecycle()
+    val live = state is BridgeState.Connected
+
+    // Two-way audio needs up to two grants, both only askable from the screen:
+    // the microphone permission, and a capture consent for the phone's audio
+    // (a fresh one every session — Android does not let it be kept).
+    var pendingMode by remember { mutableStateOf<StreamMode?>(null) }
+    var directionNote by remember { mutableStateOf<String?>(null) }
+
+    val captureLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        val data = result.data
+        if (result.resultCode == Activity.RESULT_OK && data != null) {
+            TethertoneService.acceptProjection(context, result.resultCode, data)
+            directionNote = null
+        } else {
+            directionNote = "Capture wasn't allowed, so the phone's audio can't be sent."
+        }
+    }
+    fun askForCapture() {
+        val manager = context.getSystemService(MediaProjectionManager::class.java)
+        captureLauncher.launch(manager.createScreenCaptureIntent())
+    }
+
+    fun applyMode(next: StreamMode) {
+        directionNote = null
+        BridgeController.setMode(next)
+        if (live) {
+            // Claim the microphone service type now the permission exists.
+            TethertoneService.refresh(context)
+            if (next.up == UpSource.PLAYBACK && Capture.projection == null) askForCapture()
+        }
+    }
+
+    val micLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        val next = pendingMode
+        pendingMode = null
+        when {
+            next == null -> Unit
+            granted -> applyMode(next)
+            else -> directionNote = "Tethertone needs microphone access to send audio to the Mac."
+        }
+    }
+
+    fun onModeChange(next: StreamMode) {
+        if (next.up != UpSource.OFF && !Capture.micPermission(context)) {
+            // Playback capture needs RECORD_AUDIO too.
+            pendingMode = next
+            micLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        } else {
+            applyMode(next)
+        }
+    }
 
     fun connect(info: PairingInfo) {
         pairing = info
@@ -167,6 +227,19 @@ private fun AppRoot(
                 pairing = null
             },
             modifier = Modifier.safeDrawingPadding(),
+            direction = {
+                DirectionCard(
+                    mode = mode,
+                    onModeChange = ::onModeChange,
+                    uplink = uplink,
+                    upLevel = upLevel,
+                    connected = live,
+                    playbackSupported = Capture.playbackSupported,
+                    needsCaptureConsent = live && mode.up == UpSource.PLAYBACK && Capture.projection == null,
+                    onAllowCapture = ::askForCapture,
+                    note = directionNote,
+                )
+            },
         )
 
         Screen.Scan -> ScanScreen(

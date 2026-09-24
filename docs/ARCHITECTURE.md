@@ -66,6 +66,29 @@ that completes the handshake, so the cable wins whenever it is plugged in and
 Wi-Fi takes over when it is not. The Mac polls for USB devices and sets up
 `adb reverse` as they appear.
 
+## Two-way audio
+
+With the `duplex` capability the phone can also send audio up: its microphone
+(`AudioRecord`, with `VOICE_COMMUNICATION` and the echo canceller when the Mac's
+audio plays at the same time) or other apps' playback (`AudioPlaybackCapture`
+through a MediaProjection consent, Android 10+).
+
+The **phone owns the mode**, because it holds the permissions. The Mac's
+direction switch sends a `setMode` request; the phone applies it or answers
+`refused` with a reason the Mac shows. This matters on Android 14+, where
+microphone and projection access from the background require the foreground
+service to have claimed those types while the app was on screen.
+
+On the Mac, `UpstreamPlayer` is the mirror of the phone's playback path: a
+jitter buffer (60 ms target) and the same ±0.2% drift-correction law, applied
+by linear-interpolation resampling inside the render callback. It can play to
+any output, including BlackHole, which is how the phone becomes a microphone
+for other apps. The server takes audio from one phone at a time.
+
+Loops are broken where they can be seen: Tethertone's own playback on the phone
+is marked `ALLOW_CAPTURE_BY_NONE`, ScreenCaptureKit excludes the Mac app's own
+output, and the Mac refuses to play phone audio into the device it captures.
+
 ## Pairing and authentication
 
 The QR encodes a `tethertone://` URI with the hosts, port, a 16-byte random

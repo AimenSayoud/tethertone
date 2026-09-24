@@ -6,6 +6,21 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **Two-way audio.** The phone can send its **microphone** or the **audio its
+  other apps play** (Android 10+) to the Mac, and the direction is switchable
+  live from either device: *Mac → phone*, *Phone → Mac* or *Both ways*.
+- On the Mac, the phone's audio plays through any output device, with its own
+  jitter buffer and drift correction. Choose BlackHole to use the phone as a
+  microphone in other apps.
+- Protocol: a `duplex` capability with CONTROL frames (`docs/PROTOCOL.md` §6).
+  Older apps keep working one way.
+- Feedback-loop protection on both sides; the phone's own playback is never
+  captured.
+- `docs/test-vectors.json`, checked by the Swift self-test, the Kotlin tests
+  and `tools/probe.py`; CI runs a headless server against the probe in both
+  directions (`--headless --test-tone`, `probe.py --up-tone`).
+
 ## [0.2.0] — 2026-09-24
 
 ### Changed

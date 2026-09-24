@@ -21,7 +21,7 @@ fills in while a phone is receiving audio.
 
 | Pane | Contents |
 |---|---|
-| Overview | capture method switch, stats, level meter, activity log, connected devices |
+| Overview | capture method switch, **direction** switch, stats, level meter, activity log, connected devices |
 | Audio | capture method and input device, **Hear it on this Mac too** monitor |
 | Pairing | QR code, addresses, large-QR window, copy link, token rotation |
 | Network | USB route, packet size (5/10/20 ms), remote hostname, port |

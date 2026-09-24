@@ -2,7 +2,7 @@
 
 # Tethertone
 
-**Your Mac's audio, on your Android phone — over USB or Wi-Fi, paired with one QR scan.**
+**Your Mac's audio on your Android phone, and your phone's microphone on your Mac — over USB or Wi-Fi, paired with one QR scan.**
 
 [Website](https://aimensayoud.github.io/tethertone-website/) ·
 [Download](https://aimensayoud.github.io/tethertone-website/download/) ·
@@ -31,6 +31,10 @@ Mac apps ──► system audio mix ──► Tethertone.app ──┬── USB
 
 ## Features
 
+- **Both directions** — the phone can send its microphone, or the audio its
+  other apps play, back to the Mac. Switch *Mac → phone*, *Phone → Mac* or
+  *Both ways* live from either device. Route it into BlackHole to use the phone
+  as a microphone in Zoom, Discord or OBS.
 - **Two capture methods** — read the system mix directly with ScreenCaptureKit
   (nothing to install), or read a [BlackHole](https://github.com/ExistentialAudio/BlackHole)
   loopback device with AVAudioEngine (Microphone permission only).

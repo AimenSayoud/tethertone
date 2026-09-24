@@ -20,12 +20,16 @@ builds and signing.
   token.
 - **Home** — connection state, level meter, volume, jitter buffer slider, live
   stats (RTT, buffer, underruns, lost packets) and the **Clock drift** card.
+- **Direction** — *Mac → phone*, *Phone → Mac* or *Both ways*, sending the
+  microphone or (Android 10+) what other apps play. The Mac can switch it too;
+  the phone asks for its screen only when a permission is needed.
 - **Settings** — automatic reconnect, and **Prefer low-latency audio path**.
 - **Foreground service** — playback continues with the screen off; the
   notification has a Stop action.
 
-Permissions: camera (scanning only), notifications (the playback notification)
-and network access. Nothing else.
+Permissions: camera (scanning only), notifications (the playback
+notification), network access, and — only when you choose to send audio — the
+microphone and a per-session capture consent.
 
 ## Modules
 
