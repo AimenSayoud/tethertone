@@ -105,12 +105,15 @@ pub fn start_playback(buffer: Arc<Mutex<UpstreamBuffer>>) -> Result<StreamHandle
     return pulse_backend::start_playback(buffer);
 }
 
-/// Turns arbitrary-sized interleaved s16le into exact blocks.
+/// Turns arbitrary-sized interleaved s16le into exact blocks. (PulseAudio
+/// reads exact blocks already, so Linux has no use for it.)
+#[cfg(not(target_os = "linux"))]
 pub(crate) struct Blocker {
     pending: Vec<u8>,
     block_bytes: usize,
 }
 
+#[cfg(not(target_os = "linux"))]
 impl Blocker {
     pub fn new(format: StreamFormat) -> Self {
         let block_bytes = format.block_frames as usize * format.channels as usize * 2;
