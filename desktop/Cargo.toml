@@ -1,0 +1,17 @@
+[workspace]
+resolver = "2"
+members = ["core", "app"]
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/AimenSayoud/tethertone"
+rust-version = "1.85"
+
+# Small, fast binaries for distribution.
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true
+panic = "abort"

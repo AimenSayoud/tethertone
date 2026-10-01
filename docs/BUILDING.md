@@ -85,6 +85,21 @@ Without them, `assembleRelease` signs with the debug key so anyone can still
 build one. Android refuses to update an app signed with a different key, so
 switching between debug and release builds on one phone needs an uninstall.
 
+## Windows and Linux app
+
+```bash
+cd desktop
+cargo test                          # protocol vectors, jitter buffer, server end to end
+cargo run --release                 # the window
+cargo run --release -- --headless   # server only, QR in the terminal
+```
+
+Needs `rustup`. Linux also needs `libpulse-dev` and the windowing headers listed
+in [`desktop/README.md`](../desktop/README.md). From a Mac you can type-check the
+Windows build with `rustup target add x86_64-pc-windows-msvc` and
+`cargo clippy --target x86_64-pc-windows-msvc`. Release binaries come from
+`.github/workflows/release-desktop.yml` when a version tag is pushed.
+
 ## Testing without a phone
 
 ```bash

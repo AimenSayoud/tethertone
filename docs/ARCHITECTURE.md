@@ -172,6 +172,17 @@ The protocol is implemented three times, independently:
 The Swift self-test and the Kotlin tests assert identical byte sequences on
 purpose. Two implementations of one wire format drift apart silently otherwise.
 
+## Windows and Linux
+
+`desktop/` is the same server in Rust: `core` holds the protocol, pairing, the
+jitter buffer and a thread-per-connection TCP server, with no audio or UI and
+tested on every OS; `app` adds capture (WASAPI loopback, or the PulseAudio/
+PipeWire default monitor), playback of the phone's audio, the USB watcher and
+an egui window. Each audio stream lives on its own thread and stops when its
+handle is dropped, because some platforms' stream objects can't cross threads.
+`--headless --test-tone` touches no audio device at all, which is what lets CI
+run the real binary against `tools/probe.py` on Linux and Windows.
+
 ## Why the Mac side is native Swift
 
 The Mac is the server and shares almost nothing with the Kotlin client — only

@@ -58,3 +58,67 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: python3 tools/probe.py --selftest
+
+  desktop-linux:
+    name: Windows/Linux app (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: System libraries (PulseAudio client, windowing)
+        run: sudo apt-get update && sudo apt-get install -y libpulse-dev libxkbcommon-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop
+      - name: Lint
+        working-directory: desktop
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Tests (protocol vectors, jitter buffer, server end to end)
+        working-directory: desktop
+        run: cargo test
+      - name: Build
+        working-directory: desktop
+        run: cargo build --release
+      - name: End to end, both directions (headless server + probe.py)
+        run: |
+          desktop/target/release/tethertone --headless --test-tone --no-usb > server.log 2>&1 &
+          sleep 2
+          python3 tools/probe.py --seconds 5 --up-tone
+          kill %1 || true
+          cat server.log
+
+  desktop-windows:
+    name: Windows/Linux app (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop
+      - name: Lint
+        working-directory: desktop
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Tests
+        working-directory: desktop
+        run: cargo test
+      - name: Build
+        working-directory: desktop
+        run: cargo build --release
+      - name: End to end, both directions (headless server + probe.py)
+        shell: bash
+        run: |
+          desktop/target/release/tethertone.exe --headless --test-tone --no-usb > server.log 2>&1 &
+          sleep 3
+          python tools/probe.py --seconds 5 --up-tone
+          kill %1 || true
+          cat server.log
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tethertone-windows
+          path: desktop/target/release/tethertone.exe
+

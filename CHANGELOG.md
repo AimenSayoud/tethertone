@@ -17,6 +17,11 @@ All notable changes to this project are documented here. The format follows
   Older apps keep working one way.
 - Feedback-loop protection on both sides; the phone's own playback is never
   captured.
+- **Windows and Linux app** (`desktop/`): one Rust binary per platform with
+  the same protocol, pairing, USB route and two-way audio as the macOS app.
+  Captures with WASAPI loopback (Windows) or the default sink's monitor
+  (PulseAudio/PipeWire), with a window, a Windows tray and launch at login.
+  `--headless` prints the pairing QR in a terminal.
 - `docs/test-vectors.json`, checked by the Swift self-test, the Kotlin tests
   and `tools/probe.py`; CI runs a headless server against the probe in both
   directions (`--headless --test-tone`, `probe.py --up-tone`).

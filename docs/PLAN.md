@@ -1,7 +1,8 @@
 # Plan: two-way audio, Windows and Linux, website, and what comes next
 
-Status: **proposal for review**, written 24 September 2026. Nothing here is
-built yet. Sizes are relative (S ≈ a day or two, M ≈ a week, L ≈ several
+Status (1 October 2026): phases **A–B** (two-way audio) and **D1–D4** (Windows
+and Linux app) are built and tested; awaiting device testing before the 0.3.0
+release. Written 24 September 2026. Sizes are relative (S ≈ a day or two, M ≈ a week, L ≈ several
 weeks) and assume one developer.
 
 ---

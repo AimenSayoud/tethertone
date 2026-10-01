@@ -36,3 +36,6 @@ xcuserdata/
 # Python
 __pycache__/
 .venv/
+
+# Rust (Windows/Linux app)
+desktop/target/

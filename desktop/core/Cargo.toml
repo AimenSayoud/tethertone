@@ -1,0 +1,13 @@
+[package]
+name = "tethertone-core"
+version = "0.1.0"
+description = "Tethertone wire protocol, pairing, jitter buffer and server: no audio, no UI."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+getrandom = "0.3"

@@ -14,6 +14,7 @@
 [![Release](https://img.shields.io/github/v/release/AimenSayoud/tethertone)](https://github.com/AimenSayoud/tethertone/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![macOS 14+](https://img.shields.io/badge/macOS-14%2B-black)
+![Windows · Linux](https://img.shields.io/badge/Windows%20·%20Linux-beta-0ea5e9)
 ![Android 8+](https://img.shields.io/badge/Android-8.0%2B-3DDC84)
 
 </div>
@@ -129,6 +130,14 @@ select it as the input device.
 | [macos/README.md](macos/README.md) | The macOS app |
 | [android/README.md](android/README.md) | The Android app and the shared Kotlin module |
 
+## Windows and Linux (beta)
+
+The same server for Windows and Linux lives in [`desktop/`](desktop/README.md):
+one small Rust binary per platform, with the same pairing, USB route and
+two-way audio. It captures everything the PC plays (WASAPI loopback on Windows,
+PulseAudio/PipeWire on Linux). Builds are attached to releases from 0.3.0 on;
+until then, `cargo run --release` in `desktop/`.
+
 ## Build from source
 
 ```bash
@@ -153,6 +162,7 @@ USB route. See [SECURITY.md](SECURITY.md).
 
 ```
 macos/        SwiftUI menu-bar app: capture, TCP server, QR pairing, adb setup
+desktop/      Rust app for Windows and Linux: the same server, one small binary
 android/
   shared/     Kotlin Multiplatform: protocol, pairing, jitter buffer, client state machine
   androidApp/ Compose UI, QR scanner, foreground playback service

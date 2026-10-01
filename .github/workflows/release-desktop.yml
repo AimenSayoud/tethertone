@@ -1,0 +1,69 @@
+name: Release Windows and Linux apps
+
+# The macOS and Android files are built locally by scripts/release.sh (they
+# need the project's signing keys). Pushing the version tag builds the
+# Windows and Linux apps here and attaches them to the same GitHub release.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to attach the files to (e.g. v0.3.0)
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows
+          - os: ubuntu-latest
+            platform: linux
+    runs-on: ${{ matrix.os }}
+    env:
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - name: System libraries
+        if: matrix.platform == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y libpulse-dev libxkbcommon-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop
+      - name: Build
+        working-directory: desktop
+        run: cargo build --release
+      - name: Package (Windows)
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          $v = (Get-Content VERSION).Trim()
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item desktop/target/release/tethertone.exe dist/Tethertone.exe
+          Copy-Item LICENSE dist/LICENSE.txt
+          Compress-Archive -Path dist/Tethertone.exe, dist/LICENSE.txt -DestinationPath "Tethertone-$v-windows-x86_64.zip"
+      - name: Package (Linux)
+        if: matrix.platform == 'linux'
+        run: |
+          v=$(tr -d '[:space:]' < VERSION)
+          mkdir -p "pkg/tethertone-$v"
+          cp desktop/target/release/tethertone LICENSE desktop/app/assets/tethertone.desktop desktop/app/assets/tethertone.png "pkg/tethertone-$v/"
+          tar -C pkg -czf "Tethertone-$v-linux-x86_64.tar.gz" "tethertone-$v"
+          cargo install cargo-deb --locked
+          (cd desktop/app && cargo deb --no-build --output "../../Tethertone-$v-linux-amd64.deb")
+      - name: Attach to the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          files=$(ls Tethertone-*-windows-*.zip Tethertone-*-linux-* 2>/dev/null)
+          for f in $files; do sha256sum "$f" >> "SHA256SUMS-${{ matrix.platform }}"; done
+          gh release upload "$TAG" $files "SHA256SUMS-${{ matrix.platform }}" --clobber
