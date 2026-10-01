@@ -2,7 +2,8 @@ import AppKit
 import Foundation
 
 /// `--headless` runs the server with no UI (useful over SSH, and for testing
-/// against tools/probe.py). `--selftest` runs the protocol conformance checks.
+/// against tools/probe.py); add `--test-tone` to stream a synthetic tone that
+/// needs no capture permission. `--selftest` runs the protocol conformance checks.
 @main
 enum Entry {
     static func main() {
@@ -20,6 +21,7 @@ enum Entry {
 enum Headless {
     static func run() {
         let model = ServerModel()
+        model.useTestTone = CommandLine.arguments.contains("--test-tone")
         model.start()
 
         guard model.running, let pairing = model.pairing else {

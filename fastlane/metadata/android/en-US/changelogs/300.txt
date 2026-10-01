@@ -1,0 +1,1 @@
+Two-way audio: send this phone's microphone, or what its other apps play (Android 10+), to the Mac. Switch Mac → phone, Phone → Mac or Both ways from either device.

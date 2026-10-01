@@ -57,6 +57,43 @@ method, which leaves the speakers alone.
 BlackHole's sample rate changed after capture started. Set it to 48 kHz in
 **Audio MIDI Setup** and press Stop, then Start.
 
+## Two-way audio
+
+### The Mac shows “The phone declined”
+
+The phone decides what it sends, because only it can grant the permissions.
+Some things need the phone's screen:
+
+- **Microphone:** allow microphone access in Tethertone on the phone once. After
+  that the Mac can switch the microphone on while the phone is in your pocket.
+- **Phone's audio:** Android asks for a capture consent every session. Open
+  Tethertone on the phone and tap **Allow capturing this phone's audio**.
+
+### “Another phone is already sending audio”
+
+The Mac plays audio from one phone at a time. Switch the other phone back to
+*Mac → phone* first.
+
+### Echo or howling
+
+With *Both ways* and the phone's microphone, the phone's speaker is heard by
+its own microphone. Use headphones on the phone. Tethertone uses Android's
+echo cancellation in this mode, but no canceller removes a loud speaker right
+next to the microphone.
+
+### “Would send it straight back to the phone”
+
+You are capturing BlackHole and also playing the phone's audio into BlackHole,
+so it would loop back to the phone. Under **Direction › Phone audio plays on**,
+pick another output, or use the Screen Recording capture method.
+
+### Using the phone as a microphone in other apps
+
+Install BlackHole, set **Phone audio plays on** to **BlackHole 2ch**, and pick
+BlackHole as the microphone in Zoom, Discord, OBS or any other app. If BlackHole
+is also your capture source, install **BlackHole 16ch** as a second device for
+the microphone, or capture with Screen Recording instead.
+
 ## Connecting
 
 ### The phone scans the QR but never connects

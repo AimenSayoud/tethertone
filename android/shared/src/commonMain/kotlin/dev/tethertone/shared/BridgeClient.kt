@@ -14,6 +14,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlin.math.abs
@@ -60,16 +62,48 @@ data class BridgeConfig(
  * handshake, runs a reader and a playback loop, and — unless told otherwise —
  * gets back up when the link drops.
  *
- * Nothing here is Android-specific. [createAudioSink] and [openStream] are the
- * only two seams, which is what lets the desktop sink run the identical code.
+ * With a duplex-capable server it can also send audio up ([UplinkProvider])
+ * and switch direction live (PROTOCOL.md §6). The mode belongs to this side:
+ * the server can only ask for a change, through [onModeRequested].
+ *
+ * Nothing here is Android-specific. [createAudioSink], [openStream] and
+ * [UplinkProvider] are the only seams, which is what lets the desktop sink run
+ * the identical code.
  */
 class BridgeClient(
     private val scope: CoroutineScope,
     private val deviceName: String,
     config: BridgeConfig = BridgeConfig(),
+    private val uplink: UplinkProvider? = null,
     private val clock: () -> Long = ::monotonicMillis,
 ) {
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+    private val controlJson = Json { ignoreUnknownKeys = true; explicitNulls = false }
+
+    private val _mode = MutableStateFlow(StreamMode())
+    /** The mode the user asked for. What actually runs is reported by [uplinkStatus]. */
+    val mode: StateFlow<StreamMode> = _mode.asStateFlow()
+
+    private val _uplink = MutableStateFlow(UplinkStatus())
+    val uplinkStatus: StateFlow<UplinkStatus> = _uplink.asStateFlow()
+
+    private val _upLevel = MutableStateFlow(0f)
+    /** Peak level of the audio being sent up, 0..1. */
+    val upLevel: StateFlow<Float> = _upLevel.asStateFlow()
+
+    private val _serverDuplex = MutableStateFlow<Boolean?>(null)
+    /** Whether the connected server can take audio back. Null while not connected. */
+    val serverSupportsDuplex: StateFlow<Boolean?> = _serverDuplex.asStateFlow()
+
+    /**
+     * The server asked for [StreamMode]. Return null to accept it, or the reason
+     * it cannot be done right now (shown on the computer). Called off the main
+     * thread. When unset, a request is accepted if an [UplinkProvider] exists.
+     */
+    var onModeRequested: ((StreamMode) -> String?)? = null
+
+    @kotlin.concurrent.Volatile
+    private var current: Session? = null
 
     private val _state = MutableStateFlow<BridgeState>(BridgeState.Idle)
     val state: StateFlow<BridgeState> = _state.asStateFlow()
@@ -97,6 +131,21 @@ class BridgeClient(
         _state.value = BridgeState.Idle
         _stats.value = BridgeStats()
         _level.value = 0f
+        _upLevel.value = 0f
+        _uplink.value = UplinkStatus()
+        _serverDuplex.value = null
+    }
+
+    /**
+     * Change direction. Applies live to a connected duplex server and is kept
+     * for the next connection otherwise. An invalid mode (nothing either way)
+     * is ignored.
+     */
+    fun setMode(mode: StreamMode) {
+        if (!mode.isValid) return
+        _mode.value = mode
+        if (mode.up == UpSource.OFF) _uplink.value = UplinkStatus()
+        current?.let { s -> s.scope.launch { applyMode(s) } }
     }
 
     /** Takes effect immediately; buffer and latency settings apply on the next connect. */
@@ -154,6 +203,8 @@ class BridgeClient(
                 serverName = welcome.name.ifEmpty { host },
                 host = host, rate = welcome.rate, channels = welcome.ch,
             )
+            val duplex = Proto.CAP_DUPLEX in welcome.caps
+            _serverDuplex.value = duplex
 
             val jitter = JitterBuffer(
                 welcome.rate, welcome.ch, config.targetBufferMs, config.targetBufferMs * 4
@@ -164,11 +215,20 @@ class BridgeClient(
             activeSink = sink
 
             coroutineScope {
-                val session = Session(stream, jitter, sink, welcome, clock())
+                val session = Session(stream, jitter, sink, welcome, clock(), this, duplex)
+                current = session
                 launch { readLoop(session) }
                 launch { playbackLoop(session) }
                 launch { statsLoop(session) }
                 launch { levelLoop(session) }
+                if (duplex) {
+                    launch { applyMode(session) }
+                } else if (_mode.value.up != UpSource.OFF) {
+                    _uplink.value = UplinkStatus(
+                        source = _mode.value.up,
+                        problem = "Tethertone on this computer can't receive audio yet. Update it to use two-way audio.",
+                    )
+                }
             }
             return "connection closed"
         } catch (e: CancellationException) {
@@ -176,10 +236,16 @@ class BridgeClient(
         } catch (e: Throwable) {
             return e.message ?: e::class.simpleName ?: "connection failed"
         } finally {
+            current?.uplinkSource?.runCatching { stop() }
+            current = null
             activeSink = null
             sink?.runCatching { stop(); release() }
             stream?.close()
             _level.value = 0f
+            _upLevel.value = 0f
+            _serverDuplex.value = null
+            val up = _uplink.value
+            if (up.active) _uplink.value = up.copy(active = false, kbps = 0)
         }
     }
 
@@ -189,6 +255,8 @@ class BridgeClient(
         val sink: AudioSink,
         val welcome: Welcome,
         val startedAt: Long,
+        val scope: CoroutineScope,
+        val duplex: Boolean,
     ) {
         var expectedSeq = -1L
         var lost = 0L
@@ -196,12 +264,140 @@ class BridgeClient(
         var speed = 1.0f
         var speedSupported = true
 
+        /** Off when the mode stops the server sending to us; playback then idles on silence. */
+        @kotlin.concurrent.Volatile var downEnabled = true
+        @kotlin.concurrent.Volatile var upBytes = 0L
+        var uplinkJob: Job? = null
+        @kotlin.concurrent.Volatile var uplinkSource: UplinkSource? = null
+
+        /** Frames are written from several coroutines; each must reach the socket whole. */
+        private val writeLock = Mutex()
+        /** Mode changes are applied one at a time, in the order they were asked for. */
+        val modeLock = Mutex()
+
+        suspend fun send(type: Int, payload: ByteArray, seq: Long = 0) = writeLock.withLock {
+            stream.write(encodeHeader(type, 0, payload.size, seq) + payload)
+        }
+
         private val peakLock = PlatformLock()
         private var peak = 0f
+        private var upPeak = 0f
 
         fun reportPeak(value: Float) = peakLock.withLock { if (value > peak) peak = value }
+        fun reportUpPeak(value: Float) = peakLock.withLock { if (value > upPeak) upPeak = value }
 
         fun takePeak(): Float = peakLock.withLock { val p = peak; peak = 0f; p }
+        fun takeUpPeak(): Float = peakLock.withLock { val p = upPeak; upPeak = 0f; p }
+    }
+
+    // MARK: duplex
+
+    private suspend fun sendControl(s: Session, message: ControlMessage) {
+        s.send(Proto.CONTROL, controlJson.encodeToString(message).encodeToByteArray())
+    }
+
+    /**
+     * Brings the session in line with [_mode]: stops or starts the up stream,
+     * gates the down stream, and tells the server what is really running.
+     */
+    private suspend fun applyMode(s: Session) = s.modeLock.withLock {
+        val wanted = _mode.value
+        s.downEnabled = wanted.down || !s.duplex
+
+        s.uplinkJob?.let { it.cancel(); it.join() }
+        s.uplinkJob = null
+        s.uplinkSource = null
+
+        var running = UpSource.OFF
+        var rate: Int? = null
+        var channels: Int? = null
+
+        if (wanted.up != UpSource.OFF) {
+            val result = uplink?.open(wanted.up, wanted.down)
+                ?: UplinkResult.Unavailable("This device can't send audio.")
+            when (result) {
+                is UplinkResult.Opened -> {
+                    val source = result.source
+                    running = wanted.up
+                    rate = source.sampleRate
+                    channels = source.channels
+                    s.uplinkSource = source
+                    s.upBytes = 0
+                    _uplink.value = UplinkStatus(active = true, source = wanted.up)
+                    s.uplinkJob = s.scope.launch { uplinkLoop(s, source) }
+                }
+                is UplinkResult.Unavailable ->
+                    _uplink.value = UplinkStatus(source = wanted.up, problem = result.reason)
+            }
+        } else {
+            _uplink.value = UplinkStatus()
+        }
+
+        val effective = StreamMode(down = s.downEnabled, up = running)
+        sendControl(s, ControlMessage.mode(effective, rate, channels))
+    }
+
+    /**
+     * Reads the capture source and sends it up in 10 ms blocks. A capture
+     * failure ends the up stream, not the connection: the phone keeps playing
+     * and the server is told the up stream stopped.
+     */
+    private suspend fun uplinkLoop(s: Session, source: UplinkSource) = withContext(Dispatchers.IO) {
+        val block = source.sampleRate / 100 * source.channels * 2
+        val buffer = ByteArray(block)
+        var seq = 0L
+        try {
+            source.start()
+            while (isActive) {
+                var filled = 0
+                while (filled < block) {
+                    val n = source.read(buffer, filled, block - filled)
+                    if (n < 0) throw IllegalStateException("audio capture failed ($n)")
+                    filled += n
+                }
+                s.send(Proto.AUDIO, buffer, seq)
+                seq = (seq + 1) and 0xFFFFFFFFL
+                s.upBytes += block
+                s.reportUpPeak(pcmPeakLe16(buffer, block))
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            _uplink.value = UplinkStatus(source = _mode.value.up, problem = e.message ?: "audio capture failed")
+            runCatching { sendControl(s, ControlMessage.mode(StreamMode(s.downEnabled, UpSource.OFF), null, null)) }
+        } finally {
+            source.runCatching { stop() }
+            _upLevel.value = 0f
+        }
+    }
+
+    private suspend fun handleControl(s: Session, payload: ByteArray) {
+        val message = runCatching { controlJson.decodeFromString<ControlMessage>(payload.decodeToString()) }
+            .getOrNull() ?: return
+        when (message.t) {
+            ControlMessage.SET_MODE -> {
+                val requested = message.mode
+                val refusal = when {
+                    !requested.isValid -> "A connection needs audio going at least one way."
+                    else -> onModeRequested?.invoke(requested)
+                        ?: if (requested.up != UpSource.OFF && uplink == null) "This device can't send audio." else null
+                }
+                if (refusal == null) {
+                    _mode.value = requested
+                    s.scope.launch { applyMode(s) }
+                } else {
+                    sendControl(s, ControlMessage(t = ControlMessage.REFUSED, reason = refusal))
+                }
+            }
+            ControlMessage.UP_DENIED -> {
+                val reason = message.reason ?: "The computer isn't taking audio right now."
+                _mode.value = StreamMode(down = true, up = UpSource.OFF)
+                s.scope.launch {
+                    applyMode(s)
+                    _uplink.value = UplinkStatus(problem = reason)
+                }
+            }
+        }
     }
 
     /**
@@ -275,6 +471,7 @@ class BridgeClient(
 
             when (h.type) {
                 Proto.AUDIO -> {
+                    if (!s.downEnabled) continue
                     if (s.expectedSeq >= 0 && h.seq != s.expectedSeq) s.lost += seqGap(s.expectedSeq, h.seq)
                     s.expectedSeq = (h.seq + 1) and 0xFFFFFFFFL
                     s.bytesIn += h.length
@@ -282,12 +479,13 @@ class BridgeClient(
                     s.jitter.push(payload)
                 }
                 Proto.PING -> {
-                    s.stream.write(encodeHeader(Proto.PONG, 0, payload.size, h.seq) + payload)
+                    s.send(Proto.PONG, payload, h.seq)
                     val telemetry = json.encodeToString(
                         ClientStats(s.jitter.bufferedMs, s.jitter.underruns, s.lost, s.speed)
                     ).encodeToByteArray()
-                    s.stream.write(encodeHeader(Proto.STATS, 0, telemetry.size, 0) + telemetry)
+                    s.send(Proto.STATS, telemetry)
                 }
+                Proto.CONTROL -> if (s.duplex) handleControl(s, payload)
                 Proto.BYE -> throw IllegalStateException(
                     "server closed: " + (if (payload.isEmpty()) "no reason given" else payload.decodeToString())
                 )
@@ -324,7 +522,19 @@ class BridgeClient(
         // 0.2%, so it is trimmed away instead while playback is still ramping.
         val settleUntil = clock() + SETTLE_MS
 
+        var idle = false
         while (isActive) {
+            // Down stream switched off: keep the device clocking on silence
+            // rather than stopping it, so switching back on is instant. When it
+            // returns, wait for a fresh buffer instead of starting on underruns.
+            if (!s.downEnabled || (idle && s.jitter.bufferedMs < s.jitter.targetMs)) {
+                if (!s.downEnabled && !idle) { idle = true; s.jitter.reset(); s.expectedSeq = -1 }
+                buffer.fill(0)
+                if (s.sink.write(buffer, 0, buffer.size) < 0) throw IllegalStateException("audio sink failed")
+                continue
+            }
+            if (idle) { idle = false; s.jitter.trimTo(s.jitter.targetMs, countAsOverrun = false) }
+
             s.jitter.pull(buffer, buffer.size)
             val written = s.sink.write(buffer, 0, buffer.size)
             if (written < 0) throw IllegalStateException("audio sink failed ($written)")
@@ -365,11 +575,14 @@ class BridgeClient(
             delay(LEVEL_INTERVAL_MS)
             val peak = s.takePeak()
             _level.value = if (peak >= _level.value) peak else _level.value * LEVEL_DECAY
+            val up = s.takeUpPeak()
+            _upLevel.value = if (up >= _upLevel.value) up else _upLevel.value * LEVEL_DECAY
         }
     }
 
     private suspend fun statsLoop(s: Session) {
         var lastBytes = 0L
+        var lastUpBytes = 0L
         var lastAt = clock()
         // Publish once up front. Waiting a full second would show a freshly
         // connected stream as zero everything, and the drift card would claim
@@ -381,8 +594,12 @@ class BridgeClient(
             val elapsed = (now - lastAt).coerceAtLeast(1)
             val kbps = ((s.bytesIn - lastBytes) * 8 / elapsed).toInt()
             lastBytes = s.bytesIn
+            val upKbps = ((s.upBytes - lastUpBytes) * 8 / elapsed).toInt()
+            lastUpBytes = s.upBytes
             lastAt = now
             publishStats(s, now, kbps)
+            val up = _uplink.value
+            if (up.active) _uplink.value = up.copy(kbps = upKbps)
         }
     }
 

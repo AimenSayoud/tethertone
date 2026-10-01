@@ -14,6 +14,10 @@ struct MenuContent: View {
                     Text(model.status).font(.caption).foregroundStyle(.secondary)
                     Label(model.sourceKind.title, systemImage: model.sourceKind.symbol)
                         .font(.caption2).foregroundStyle(.tertiary)
+                    if let up = model.upStream {
+                        Label("Receiving from \(up.phoneName)", systemImage: "arrow.up.circle")
+                            .font(.caption2).foregroundStyle(.green)
+                    }
                 }
                 Spacer()
                 Circle()

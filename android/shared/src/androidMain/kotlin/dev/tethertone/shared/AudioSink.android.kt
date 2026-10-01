@@ -96,6 +96,13 @@ internal class AudioTrackSink(
         val attributes = AudioAttributes.Builder()
             .setUsage(AudioAttributes.USAGE_MEDIA)
             .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+            .apply {
+                // The Mac's stream must never be captured back: with "Both"
+                // and playback capture on, it would loop straight back to it.
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    setAllowedCapturePolicy(AudioAttributes.ALLOW_CAPTURE_BY_NONE)
+                }
+            }
             .build()
 
         val builder = AudioTrack.Builder()

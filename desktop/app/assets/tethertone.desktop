@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Tethertone
+GenericName=Audio streaming
+Comment=Your computer's audio on your Android phone, and back
+Exec=tethertone
+Icon=tethertone
+Categories=AudioVideo;Audio;Network;
+Keywords=audio;android;phone;speaker;microphone;stream;

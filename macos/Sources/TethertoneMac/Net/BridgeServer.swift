@@ -30,6 +30,23 @@ final class BridgeServer {
     /// Delivered on the main queue.
     var onActivity: ((ActivityEntry.Kind, String) -> Void)?
 
+    // MARK: up stream (duplex)
+
+    /// A phone started sending audio up: (sample rate, channels, phone name). Main queue.
+    var onUpStreamStarted: ((Int, Int, String) -> Void)?
+    /// The up stream ended. Main queue.
+    var onUpStreamStopped: (() -> Void)?
+    /// Up-stream audio. Called on the server queue — the hot path, no hop.
+    var onUpAudio: ((Data) -> Void)?
+    /// A phone declined a mode change asked for from this Mac: (phone name, reason). Main queue.
+    var onRefused: ((String, String) -> Void)?
+
+    /// Only one phone's audio is played at a time (PROTOCOL.md §6).
+    private var upOwner: ObjectIdentifier?
+    private var upOwnerFormat: (rate: Int, channels: Int)?
+    /// When set, every up stream is refused with this reason (e.g. it would loop).
+    private var upBlockedReason: String?
+
     /// Bytes actually written to sockets, not bytes captured — with nobody
     /// connected this stays at zero, which is the honest answer.
     private(set) var totalBytesSent: Int64 = 0
@@ -104,13 +121,76 @@ final class BridgeServer {
             self?.totalBytesSent += Int64(count)
         }
         session.onReady = { [weak self] _ in self?.publish() }
+        session.onModeChanged = { [weak self] session in self?.modeChanged(session) }
+        session.onUpAudio = { [weak self] session, data in
+            guard let self, self.upOwner == session.snapshot.id else { return }
+            self.onUpAudio?(data)
+        }
+        session.onRefused = { [weak self] session, reason in
+            let name = session.snapshot.name
+            DispatchQueue.main.async { self?.onRefused?(name, reason) }
+        }
         session.onUpdate = { [weak self] _ in self?.publish() }
-        session.onClosed = { [weak self] _ in
+        session.onClosed = { [weak self] session in
             guard let self else { return }
             self.sessions.removeValue(forKey: ObjectIdentifier(connection))
+            if self.upOwner == session.snapshot.id { self.releaseUpStream() }
             self.publish()
         }
         session.start()
+    }
+
+    /// Claims, keeps or releases the up stream as a client's mode changes.
+    /// Runs on the server queue.
+    private func modeChanged(_ session: ClientSession) {
+        let id = session.snapshot.id
+        let wantsUp = session.snapshot.mode.up != .off
+
+        guard wantsUp else {
+            if upOwner == id { releaseUpStream() }
+            return
+        }
+        if let reason = upBlockedReason {
+            session.sendControl(.upDenied(reason))
+            return
+        }
+        if let owner = upOwner, owner != id {
+            let other = sessions[owner]?.snapshot.name ?? "Another phone"
+            session.sendControl(.upDenied("\(other) is already sending audio to this computer."))
+            return
+        }
+        guard let format = session.upFormat else { return }
+        // Same owner and format: nothing to restart.
+        if upOwner == id, let current = upOwnerFormat,
+           current.rate == format.rate, current.channels == format.channels { return }
+        upOwner = id
+        upOwnerFormat = format
+        let name = session.snapshot.name
+        DispatchQueue.main.async { [weak self] in self?.onUpStreamStarted?(format.rate, format.channels, name) }
+    }
+
+    private func releaseUpStream() {
+        upOwner = nil
+        upOwnerFormat = nil
+        DispatchQueue.main.async { [weak self] in self?.onUpStreamStopped?() }
+    }
+
+    /// Ask a phone to change direction. The phone decides; its answer arrives
+    /// as a mode update or through `onRefused`.
+    func requestMode(_ id: ObjectIdentifier, _ mode: StreamMode) {
+        queue.async { [weak self] in self?.sessions[id]?.sendControl(.setMode(mode)) }
+    }
+
+    /// Refuse all up streams (and stop the current one) while `reason` is set.
+    func blockUpStreams(_ reason: String?) {
+        queue.async { [weak self] in
+            guard let self else { return }
+            self.upBlockedReason = reason
+            if let reason, let owner = self.upOwner {
+                self.sessions[owner]?.sendControl(.upDenied(reason))
+                self.releaseUpStream()
+            }
+        }
     }
 
     func disconnect(_ id: ObjectIdentifier) {

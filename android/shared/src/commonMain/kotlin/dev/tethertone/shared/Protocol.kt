@@ -14,6 +14,10 @@ object Proto {
     const val PONG = 2
     const val STATS = 3
     const val BYE = 4
+    const val CONTROL = 5
+
+    /** Capability: audio in both directions plus CONTROL frames. See PROTOCOL.md §6. */
+    const val CAP_DUPLEX = "duplex"
 }
 
 /**
@@ -95,7 +99,7 @@ data class Hello(
     val role: String = "sink",
     val token: String,
     val name: String,
-    val caps: List<String> = listOf("pcm_s16le"),
+    val caps: List<String> = listOf("pcm_s16le", Proto.CAP_DUPLEX),
 )
 
 @Serializable
@@ -108,6 +112,7 @@ data class Welcome(
     val block: Int = 480,
     val name: String = "",
     val err: String? = null,
+    val caps: List<String> = emptyList(),
 )
 
 @Serializable
@@ -117,3 +122,47 @@ data class ClientStats(
     @SerialName("lost") val lost: Long,
     @SerialName("speed") val speed: Float,
 )
+
+/** What the client sends up to the server, if anything. */
+enum class UpSource(val wire: String) {
+    OFF("off"),
+    MIC("mic"),
+    /** Audio other apps on the phone are playing. */
+    PLAYBACK("playback");
+
+    companion object {
+        /** Anything unrecognised is OFF: a newer peer's source we cannot produce. */
+        fun fromWire(value: String?): UpSource = entries.firstOrNull { it.wire == value } ?: OFF
+    }
+}
+
+/** Which way audio flows on one connection. The client owns it (PROTOCOL.md §6). */
+data class StreamMode(val down: Boolean = true, val up: UpSource = UpSource.OFF) {
+    val isValid: Boolean get() = down || up != UpSource.OFF
+}
+
+/** Payload of a CONTROL frame. Only the fields a given `t` uses are present. */
+@Serializable
+data class ControlMessage(
+    val t: String,
+    val down: Boolean? = null,
+    val up: String? = null,
+    val upRate: Int? = null,
+    val upCh: Int? = null,
+    val reason: String? = null,
+) {
+    val mode: StreamMode get() = StreamMode(down = down ?: true, up = UpSource.fromWire(up))
+
+    companion object {
+        const val MODE = "mode"
+        const val SET_MODE = "setMode"
+        const val REFUSED = "refused"
+        const val UP_DENIED = "upDenied"
+
+        fun mode(mode: StreamMode, upRate: Int?, upCh: Int?) = ControlMessage(
+            t = MODE, down = mode.down, up = mode.up.wire,
+            upRate = upRate.takeIf { mode.up != UpSource.OFF },
+            upCh = upCh.takeIf { mode.up != UpSource.OFF },
+        )
+    }
+}
